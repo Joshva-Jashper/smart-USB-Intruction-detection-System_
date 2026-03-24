@@ -5,7 +5,6 @@ import os
 import logging
 import threading
 import socket
-import webbrowser
 
 import db_linux
 
@@ -108,7 +107,6 @@ def update_device(device_id):
     })
 
 
-# 🔹 NEW: Dynamic free port finder
 def find_free_port():
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(('', 0))
@@ -122,11 +120,6 @@ def start_server():
 
     port = find_free_port()
     print(f"🚀 Server running at http://127.0.0.1:{port}")
-
-    threading.Timer(
-        1.5,
-        lambda: webbrowser.open(f"http://127.0.0.1:{port}/")
-    ).start()
 
     app.run(host="127.0.0.1", port=port, debug=False)
 
