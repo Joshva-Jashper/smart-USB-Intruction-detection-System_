@@ -3,87 +3,114 @@ import subprocess
 import time
 import threading
 
-_blocked_ids = []
+_grabbed_devices = []
+_grab_threads = []
+_stop_event = threading.Event()
 
-def is_root():
-    return os.geteuid() ==  0
-
-def get_xinput_keyboards(): 
+def get_keyboard_devices():
+    keyboards = []
     try:
-        output = subprocess.check_output(
-            ["xinput", "list", "--short"],
-            text=True,
-            stderr=subprocess.DEVNULL  # suppress stderr
-        )
-    except Exception:
-        return []
+        with open("/proc/bus/input/devices", "r") as f:
+            content = f.read()
 
-    keyboard_ids = []
-    skip_keywords = ["mouse", "pointer", "touchpad", "trackpad", "trackpoint",
-                     "tablet", "stylus", "eraser", "cursor", "touch"]
+        blocks = content.strip().split("\n\n")
+        for block in blocks:
+            if "EV=" not in block:
+                continue
+            lines = block.splitlines()
 
-    for line in output.splitlines():
-        line_lower = line.lower()
-        if any(kw in line_lower for kw in skip_keywords):
-            continue
-        if "keyboard" not in line_lower:
-            continue
-        if "id=" not in line_lower:
-            continue
-        try:
-            id_part   = line.split("id=")[1].split()[0].strip()
-            device_id = int(id_part)
-            name      = line.split("\t")[0].strip().lstrip("⎜⎟⎠⎡⎣↳ ").strip()
-            keyboard_ids.append((device_id, name))
-        except (IndexError, ValueError):
-            continue
+            name = ""
+            handlers = []
+            is_keyboard = False
 
-    return keyboard_ids
+            for line in lines:
+                if line.startswith("N: Name="):
+                    name = line.split("=", 1)[1].strip().strip('"')
+                if line.startswith("H: Handlers="):
+                    handlers = line.split("=", 1)[1].strip().split()
+                if line.startswith("B: EV="):
+                    ev_val = int(line.split("=")[1].strip(), 16)
+                    if ev_val & 0x2:
+                        is_keyboard = True
+
+            skip_keywords = ["mouse", "pointer", "touchpad", "trackpad",
+                             "trackpoint", "tablet", "stylus", "button"]
+            if any(kw in name.lower() for kw in skip_keywords):
+                continue
+
+            if is_keyboard:
+                for h in handlers:
+                    if h.startswith("event"):
+                        path = f"/dev/input/{h}"
+                        if os.path.exists(path):
+                            keyboards.append((path, name))
+
+    except Exception as e:
+        print(f"Error reading input devices: {e}")
+
+    return keyboards
+
+
+def _grab_and_hold(device_path, stop_event):
+    import fcntl
+    EVIOCGRAB = 0x40044590
+
+    try:
+        fd = open(device_path, "rb")
+        fcntl.ioctl(fd, EVIOCGRAB, 1)
+
+        while not stop_event.is_set():
+            time.sleep(0.1)
+
+        fcntl.ioctl(fd, EVIOCGRAB, 0)
+        fd.close()
+
+    except PermissionError:
+        print(f"❌ Permission denied: {device_path} — run as root (sudo)")
+    except Exception as e:
+        print(f"❌ Error grabbing {device_path}: {e}")
+
 
 def block_keyboard(seconds=None):
-    global _blocked_ids
+    global _grabbed_devices, _grab_threads, _stop_event
 
-    keyboards = get_xinput_keyboards()
-    if not keyboards:
+    if not os.geteuid() == 0:
+        print("❌ Must run as root (sudo) to grab input devices")
         return False
 
-    _blocked_ids = []
-    for device_id, name in keyboards:
-        try:
-            subprocess.run(
-                ["xinput", "disable", str(device_id)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL   # suppress BadAccess X errors
-            )
-            _blocked_ids.append((device_id, name))
-        except Exception:
-            pass
+    keyboards = get_keyboard_devices()
+    if not keyboards:
+        print("❌ No keyboard devices found")
+        return False
 
-    success = len(_blocked_ids) > 0
-    if success:
-        print("🔒 KEYBOARD LOCKED")
-        if seconds:
-            threading.Timer(seconds, unblock_keyboard).start()
+    _stop_event = threading.Event()
+    _grab_threads = []
+    _grabbed_devices = keyboards
 
-    return success
+    for path, name in keyboards:
+        t = threading.Thread(target=_grab_and_hold, args=(path, _stop_event), daemon=True)
+        t.start()
+        _grab_threads.append(t)
+
+    time.sleep(0.3)
+    print("🔒 KEYBOARD LOCKED")
+
+    if seconds:
+        threading.Timer(seconds, unblock_keyboard).start()
+
+    return True
+
 
 def unblock_keyboard():
-    global _blocked_ids
-
-    for device_id, name in _blocked_ids:
-        try:
-            subprocess.run(
-                ["xinput", "enable", str(device_id)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL   # suppress any X errors
-            )
-        except Exception:
-            pass
-
-    _blocked_ids = []
+    global _stop_event
+    _stop_event.set()
+    time.sleep(0.3)
     print("🔓 KEYBOARD UNLOCKED")
     return True
 
+
 if __name__ == "__main__":
+    print("Blocking keyboard for 10 seconds...")
     block_keyboard(seconds=10)
     time.sleep(12)
+    print("Done.")
