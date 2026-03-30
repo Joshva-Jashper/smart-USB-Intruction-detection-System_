@@ -30,7 +30,8 @@ def _devcon(command, vid, pid, devcon_path=None):
     try:
         r = subprocess.run(
             [devcon_path, command, pattern],
-            capture_output=True, text=True, timeout=15
+            capture_output=True, text=True, timeout=15,
+            creationflags=subprocess.CREATE_NO_WINDOW
         )
         out = r.stdout + r.stderr
         ok = sum(
@@ -53,13 +54,13 @@ def _devcon_by_instance(command, vid, pid, devcon_path=None):
 
     count = 0
     try:
-        for d in wmi.WMI().Win32_PnPEntity():
-            if (d.DeviceID
-                    and f"VID_{vid.upper()}" in d.DeviceID
-                    and f"PID_{pid.upper()}" in d.DeviceID):
+        query = f"SELECT DeviceID FROM Win32_PnPEntity WHERE DeviceID LIKE '%VID_{vid.upper()}%PID_{pid.upper()}%'"
+        for d in wmi.WMI().query(query):
+            if d.DeviceID:
                 r = subprocess.run(
                     [devcon_path, command, f"@{d.DeviceID}"],
-                    capture_output=True, text=True, timeout=10
+                    capture_output=True, text=True, timeout=10,
+                    creationflags=subprocess.CREATE_NO_WINDOW
                 )
                 if r.returncode == 0:
                     count += 1
