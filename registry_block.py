@@ -24,13 +24,11 @@ def _ensure_policy_enabled():
 
 
 def _refresh_policy():
-    """Force Group Policy to re-evaluate registry changes immediately."""
+    """Force Group Policy to re-evaluate registry changes asynchronously."""
     try:
-        subprocess.run(
-            ["gpupdate", "/force"],
-            capture_output=True,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-            timeout=30
+        subprocess.Popen(
+            ["gpupdate", "/force", "/Wait:0"],
+            creationflags=subprocess.CREATE_NO_WINDOW
         )
     except Exception as e:
         print(f"   ⚠️ gpupdate failed: {e}")
@@ -40,42 +38,14 @@ def get_hardware_ids(vid, pid):
     """Return base hardware ID + any live device instance IDs matching VID/PID."""
     ids = {f"USB\\VID_{vid.upper()}&PID_{pid.upper()}"}
     try:
-        for d in wmi.WMI().Win32_PnPEntity():
-            if (d.DeviceID
-                    and f"VID_{vid.upper()}" in d.DeviceID
-                    and f"PID_{pid.upper()}" in d.DeviceID):
+        query = f"SELECT DeviceID FROM Win32_PnPEntity WHERE DeviceID LIKE '%VID_{vid.upper()}%PID_{pid.upper()}%'"
+        for d in wmi.WMI().query(query):
+            if d.DeviceID:
                 ids.add(d.DeviceID)
     except Exception:
         pass
     return list(ids)
 
-
-def _trigger_reinstall(vid, pid):
-    """
-    Disable then re-enable devices via pnputil so the new policy is enforced
-    without requiring a physical replug.
-    """
-    try:
-        for d in wmi.WMI().Win32_PnPEntity():
-            if (d.DeviceID
-                    and f"VID_{vid.upper()}" in d.DeviceID
-                    and f"PID_{pid.upper()}" in d.DeviceID):
-                dev_id = d.DeviceID
-                subprocess.run(
-                    ["pnputil", "/disable-device", dev_id],
-                    capture_output=True,
-                    creationflags=subprocess.CREATE_NO_WINDOW,
-                    timeout=10
-                )
-                time.sleep(0.5)
-                subprocess.run(
-                    ["pnputil", "/enable-device", dev_id],
-                    capture_output=True,
-                    creationflags=subprocess.CREATE_NO_WINDOW,
-                    timeout=10
-                )
-    except Exception as e:
-        print(f"   ⚠️ Reinstall trigger failed: {e}")
 
 
 def registry_block_device(vid, pid):
@@ -112,8 +82,7 @@ def registry_block_device(vid, pid):
         winreg.CloseKey(k)
         print(f"   🔒 Registry ....... Device added")
 
-        _refresh_policy()       # ← apply policy before touching device
-        _trigger_reinstall(vid, pid)
+        _refresh_policy()       # ← run async gpupdate
         return True
     except Exception as e:
         print(f"   ❌ Registry block error: {e}")
@@ -149,6 +118,5 @@ def registry_unblock_device(vid, pid):
     winreg.CloseKey(k)
     print(f"   🔓 Registry: Devices entries removed")
 
-    _refresh_policy()           # ← apply policy before re-enabling device
-    _trigger_reinstall(vid, pid)
+    _refresh_policy()           # ← run async gpupdate
     return True
