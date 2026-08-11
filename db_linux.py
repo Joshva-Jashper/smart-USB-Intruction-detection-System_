@@ -4,11 +4,15 @@ import psycopg2.extras
 import time
 
 # ─── Neon PostgreSQL Connection String ───────────────────────────────────────
-DATABASE_URL = (
-    "postgresql://neondb_owner:npg_I2PRZlWQ6Ktu"
-    "@ep-tiny-sea-ai88kkrj-pooler.c-4.us-east-1.aws.neon.tech"
-    "/neondb?sslmode=require&channel_binding=require"
-)
+import os
+from dotenv import load_dotenv
+from pathlib import Path
+env_path = Path(__file__).resolve().parent / ".env"
+load_dotenv(dotenv_path=env_path)
+
+# ─── Neon PostgreSQL Connection String ───────────────────────────────────────
+DATABASE_URL = os.getenv("DATABASE_URL")
+
 
 # ─── Init (lazy — created on first use) ──────────────────────────────────────
 _conn = None
